@@ -1,10 +1,19 @@
-# RTL Namespace Manager - P1 configuration
-# See RTL_Namespace_Manager_方案设计计划.md (sec 5) and P1执行文档.md (sec 5)
+# RTL Namespace Manager - configuration
+# See RTL_Namespace_Manager_方案设计计划.md and RTL_Namespace_Manager_P1执行文档.md
+#
+# Layout model:
+#   - src/rtl contains ONE shared copy of every RTL file (single source of truth)
+#   - each 'project' below consumes the SAME shared source, but its generated
+#     RTL gets that project's namespace prefix (<PROJECT>__<module>)
+#   - 'common_modules': module names that are shared by ALL projects. They are
+#     NOT renamed (module declaration and every instantiation keep the original
+#     name) and their files are emitted ONCE under build/all/common/, so the
+#     ALL build contains a single copy that every project references.
 projects:
 
   PROJA:
     source:
-      - src/PROJA
+      - src
     namespace: PROJA
     rename:
       module: true
@@ -13,9 +22,14 @@ projects:
 
   PROJB:
     source:
-      - src/PROJB
+      - src
     namespace: PROJB
     rename:
       module: true
       interface: false
       package: false
+
+# Module names that must stay un-namespaced for every project (global list).
+# e.g. AOU_RX_CORE is treated as a common/shared module in tests.
+common_modules:
+  - AOU_RX_CORE

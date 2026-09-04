@@ -38,8 +38,9 @@ macro bodies are preserved byte-for-byte.
 ## Quick start
 
 ```bash
-# 1. config
-config/namespace.yaml          # projects: source dirs + namespace per project
+# 1. config: every project points at the SAME shared source tree; optional
+#    global 'common_modules' list keeps selected modules un-namespaced
+config/namespace.yaml
 
 # 2. dry run  (nothing written)
 python3 tools/rtl_namespace.py --config config/namespace.yaml --out build/all --dry-run
@@ -55,28 +56,67 @@ make namespace_dryrun
 make namespace_check
 make namespace
 
-# 5. acceptance + compile smoke test (uses iverilog on this repo's demo RTL)
+# 5. acceptance + compile smoke test (uses iverilog on the demo subset)
 make verify
 bash scripts/run_p1.sh
+```
+
+### config model
+
+One shared source tree is compiled into a namespaced copy per project:
+
+```yaml
+projects:
+  PROJA:  { source: [src], namespace: PROJA }   # -> PROJA__<module>
+  PROJB:  { source: [src], namespace: PROJB }   # -> PROJB__<module>
+
+# Global list: these modules are shared by ALL projects. Their module
+# declaration AND every instantiation keep the original name, and the source
+# file is emitted once under build/all/common/ (never duplicated per project).
+common_modules:
+  - AOU_RX_CORE
+```
+
+The common list applies to every project. A file that declares a common module
+must not also declare non-common modules (validation rejects mixed files);
+a common file that instantiates a non-common module produces a `[WARN]`.
+
+### Overriding the RTL source directory
+
+The `source:` dirs from the config can be overridden on the command line /
+Makefile without editing the YAML:
+
+```bash
+# direct CLI: overrides 'source:' for every project (repeatable / comma separated)
+python3 tools/rtl_namespace.py --config config/namespace.yaml --out build/all \
+    --src src,src/extra
+
+# via Makefile (omit RTL_SRC to use the config's source dirs)
+make namespace RTL_SRC=src,src/extra
+make namespace_dryrun RTL_SRC=/path/to/other/rtl
 ```
 
 ### Output
 
 ```text
 build/all/
-├── PROJA/rtl/PROJA__fifo.sv      module PROJA__fifo
+├── PROJA/rtl/PROJA__fifo.sv      module PROJA__fifo     (per-project copy)
 ├── PROJA/rtl/PROJA__ctrl.sv      instantiates PROJA__fifo
 ├── PROJB/rtl/PROJB__fifo.sv      module PROJB__fifo
 ├── PROJB/rtl/PROJB__ctrl.sv      instantiates PROJB__fifo
+├── common/rtl/AOU_RX_CORE.sv     module AOU_RX_CORE     (single shared copy)
 ├── module_map.json               original -> generated traceability
 └── filelist.f                    ready for vcs -f / xrun -f / iverilog -f
 ```
 
+Generated files are plain rewrites of the original source (no header comment;
+pass `--header` if you want a provenance header).
+
 ## Repository layout
 
 ```text
-├── config/namespace.yaml         project / source / namespace config
-├── src/PROJA|PROJB/rtl/          demo RTL (treated as immutable Perforce sources)
+├── config/namespace.yaml         project / source / namespace / common config
+├── src/rtl/                      single shared RTL tree (immutable "Perforce" sources)
 ├── tools/rtl_namespace.py        P1 core tool (single file, stdlib + PyYAML)
 ├── scripts/
 │   ├── run_p1.sh                 full P1 flow driver (dry-run→generate→check→verify→compile)
@@ -89,10 +129,12 @@ build/all/
 
 ## P1 scope & status
 
-**Implemented (P1)** — module declaration rename, plain / parameterized /
-array instantiation rename, project namespace, duplicate & collision checks,
-`module_map.json`, `filelist.f`, `--dry-run / --check / --diff`, immutable
-sources (verified by sha256 in `run_p1.sh`), compile smoke test.
+**Implemented (P1)** — shared single source tree compiled per project, module
+declaration rename, plain / parameterized / array instantiation rename,
+global `common_modules` policy (kept bare & emitted once under `common/`),
+duplicate & collision checks, `module_map.json`, `filelist.f`,
+`--dry-run / --check / --diff`, immutable sources (verified by sha256 in
+`run_p1.sh`), compile smoke test.
 
 **Not yet (P2+)** — interface / package / bind / checker namespace, complex
 macro & `generate` semantics, full SystemVerilog AST, dependency graph &

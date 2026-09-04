@@ -120,8 +120,15 @@ fl = os.path.join(OUT, "filelist.f")
 if os.path.isfile(fl):
     lines = [l.strip() for l in read(fl).splitlines() if l.strip()]
     missing = [l for l in lines if not os.path.exists(os.path.join(ROOT, l))]
-    check(len(lines) == 4, "filelist.f lists 4 files (got %d)" % len(lines))
     check(not missing, "every filelist entry exists (missing: %s)" % missing)
+    demo_entries = [
+        "build/all/PROJA/rtl/PROJA__fifo.sv",
+        "build/all/PROJA/rtl/PROJA__ctrl.sv",
+        "build/all/PROJB/rtl/PROJB__fifo.sv",
+        "build/all/PROJB/rtl/PROJB__ctrl.sv",
+    ]
+    check(all(d in lines for d in demo_entries),
+          "filelist.f contains the demo fifo/ctrl entries (total %d files)" % len(lines))
 else:
     check(False, "filelist.f exists")
 

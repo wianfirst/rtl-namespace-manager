@@ -29,12 +29,14 @@ Usage:
     python3 tools/rtl_namespace.py --config ... --out ... --dry-run
     python3 tools/rtl_namespace.py --config ... --out ... --check
     python3 tools/rtl_namespace.py --config ... --out ... --diff
+    python3 tools/rtl_namespace.py --config ... --out ... --src <rtl_dir>  # override 'source:' for all projects
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import sys
 
 try:
@@ -42,8 +44,8 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-TOOL_VERSION = "1.0.0"
-GENERATED_HEADER = (
+TOOL_VERSION = "1.1.0"
+GENERATED_HEADER = (  # only used with --header (off by default)
     "// ------------------------------------------------------------------\n"
     "// GENERATED FILE - DO NOT EDIT / DO NOT COMMIT TO PERFORCE\n"
     "// RTL Namespace Manager v{v} (P1)\n"
@@ -424,7 +426,15 @@ def load_config(path):
     if len(namespaces) != len(set(namespaces)):
         die("config %s: duplicate namespace across projects (each project needs "
             "a unique namespace)" % path)
-    return projects
+
+    # Global common-module list: these module names keep their original name in
+    # EVERY project (module declaration AND every instantiation stay bare) and
+    # their source files are emitted once under <out>/common/.
+    raw_common = raw.get("common_modules") or []
+    if isinstance(raw_common, str):
+        raw_common = [raw_common]
+    common = [str(m).strip() for m in raw_common if str(m).strip()]
+    return projects, common
 
 
 def die(msg):
@@ -515,46 +525,119 @@ def main():
                     help="validation only (duplicate/collision/config); no writes")
     ap.add_argument("--diff", action="store_true",
                     help="report changed/unchanged generated files vs previous run")
+    ap.add_argument("--header", action="store_true",
+                    help="prepend a 'GENERATED FILE' comment header to each "
+                         "generated file (off by default)")
+    ap.add_argument("--src", action="append", metavar="DIR",
+                    help="override the RTL source directory(ies) from the "
+                         "config ('source:') for EVERY project. Repeatable and "
+                         "comma/space separated, e.g. --src rtlA,rtlB")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    projects, common_modules = load_config(args.config)
+    common_set = set(common_modules)
     out_root = _norm(args.out)
 
+    # --src overrides the per-project 'source' dirs from the config
+    if args.src:
+        src_dirs = []
+        for chunk in args.src:
+            for piece in re.split(r"[,\s]+", chunk):
+                if piece:
+                    src_dirs.append(_norm(piece))
+        if not src_dirs:
+            print("[ERROR] --src given but no directory found in: %s" % args.src)
+            sys.exit(1)
+        for pr in projects.values():
+            pr["sources"] = list(src_dirs)
+        print("[INFO] RTL source overridden by --src: %s"
+              % ", ".join(src_dirs))
+
     print("[INFO] Projects:")
-    for pname, pr in cfg.items():
+    for pname, pr in projects.items():
         for s in pr["sources"]:
             print("    %s: %s  (namespace=%s)" % (pname, s, pr["namespace"]))
 
     print("\n[INFO] Scanning RTL...")
-    module_decls = {}     # project -> orig -> [decl dicts]
-    per_file_project = {}  # source -> project
-    for pname, pr in cfg.items():
+    module_decls = {}      # project -> orig -> [decl dicts]
+    decl_by_name = {}      # orig -> first {source, line} (across all projects)
+    file_declared = {}     # source -> set(orig names declared in that file)
+    file_srcroot = {}      # source -> source root used to reach it
+    for pname, pr in projects.items():
         files = collect_project_files(pr, pname)
         decls, per_file = scan_modules(files)
         module_decls[pname] = decls
-        for src in per_file:
-            per_file_project[src] = pname
+        for orig, dlist in decls.items():
+            if orig not in decl_by_name and dlist:
+                decl_by_name[orig] = dict(dlist[0])
+        for src, names in per_file.items():
+            file_declared.setdefault(src, set()).update(names)
+    # remember which source root reaches each file (used to mirror subdirs)
+    for pname, pr in projects.items():
+        for full, srcroot in collect_project_files(pr, pname):
+            file_srcroot.setdefault(full, srcroot)
 
-    nmod = sum(len(d) for d in module_decls.values())
-    print("[INFO] Found %d module declaration(s) across %d project(s)"
-          % (nmod, len(cfg)))
+    all_orig = set(decl_by_name)
+    print("[INFO] Found %d module declaration(s) (unique names: %d) across %d "
+          "project(s)" % (sum(len(d) for d in module_decls.values()),
+                          len(all_orig), len(projects)))
 
-    # ---- rename maps: project -> orig -> new
+    # ---- common-module config sanity
+    unknown_common = common_set - all_orig
+    if unknown_common:
+        print("[FAIL] Validation failed:")
+        for m in sorted(unknown_common):
+            print("    [ERROR] common_modules entry '%s' is not declared by any "
+                  "scanned RTL file" % m)
+        sys.exit(1)
+
+    # files that declare >=1 common module are emitted ONCE under <out>/common
+    common_files = sorted(s for s, names in file_declared.items()
+                          if names & common_set)
+    for src in common_files:
+        names = file_declared[src]
+        if names - common_set:
+            print("[FAIL] Validation failed:")
+            print("    [ERROR] %s declares both common (%s) and non-common (%s) "
+                  "modules; split the file so each file is either fully common "
+                  "or fully namespaced" % (
+                      src, ", ".join(sorted(names & common_set)),
+                      ", ".join(sorted(names - common_set))))
+            sys.exit(1)
+    for orig in sorted(common_set):
+        seen_src = {d["source"] for p in projects
+                    for d in module_decls[p].get(orig, [])}
+        if len(seen_src) > 1:
+            print("[FAIL] Validation failed:")
+            print("    [ERROR] common module '%s' is declared in multiple "
+                  "files: %s" % (orig, ", ".join(sorted(seen_src))))
+            sys.exit(1)
+
+    # ---- rename maps: project -> orig -> new  (common modules excluded)
     rename_maps = {}
     for pname, decls in module_decls.items():
-        ns = cfg[pname]["namespace"]
-        rm = {}
-        for orig in decls:
-            rm[orig] = gen_name(ns, orig)
-        rename_maps[pname] = rm
+        ns = projects[pname]["namespace"]
+        rename_maps[pname] = {o: gen_name(ns, o) for o in decls
+                              if o not in common_set}
 
-    print("\n[INFO] Module namespace:")
+    print("\n[INFO] Module namespace (renamed per project):")
     for pname, decls in sorted(module_decls.items()):
         for orig in sorted(decls):
-            print("    %s: %s -> %s" % (pname, orig, rename_maps[pname][orig]))
+            if orig in common_set:
+                print("    %s: %s -> %s  (COMMON: keep name)"
+                      % (pname, orig, orig))
+            else:
+                print("    %s: %s -> %s" % (pname, orig,
+                                            rename_maps[pname][orig]))
+
+    if common_set:
+        print("\n[INFO] Common modules (global list, NOT renamed, emitted once "
+              "under %s/common/):" % out_root)
+        for orig in sorted(common_set):
+            print("    %s" % orig)
 
     # ---- validation (always runs before any write)
-    errors = validate(module_decls, rename_maps, cfg)
+    errors = validate(module_decls, rename_maps, common_set)
     if errors:
         print("\n[FAIL] Validation failed:")
         for e in errors:
@@ -564,21 +647,26 @@ def main():
           "config errors.")
 
     # ---- plan every file rewrite
-    plan = []  # dict per (project, source, out_file, edits, changes)
-    unresolved = []
+    plan = []          # per-project (namespaced) outputs
+    common_plan = []   # single shared outputs (copied as-is)
     nchanges = 0
-    for pname, pr in cfg.items():
-        ns = pr["namespace"]
+
+    def make_item(pname, ns, full, srcroot, edits, changes, module_info,
+                  out_file):
+        return {"project": pname, "ns": ns, "source": _norm(full),
+                "srcroot": srcroot, "out": out_file, "edits": edits,
+                "changes": changes, "module_info": module_info}
+
+    for pname, pr in projects.items():
+        ns = projects[pname]["namespace"]
         rm = rename_maps[pname]
         for full, srcroot in collect_project_files(pr, pname):
+            if full in common_files:
+                continue  # handled once, below
             with open(full, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
             _toks, edits, changes = plan_renames(text, rm)
-            # decide output basename: single renamed module -> new name; else keep
-            file_mods = []
-            for o, dl in module_decls[pname].items():
-                if any(d["source"] == full for d in dl):
-                    file_mods.append(o)
+            file_mods = sorted(file_declared[full] & set(rm))
             renamed_in_file = [o for o in file_mods if o in rm]
             if len(renamed_in_file) == 1:
                 base = rm[renamed_in_file[0]] + os.path.splitext(full)[1]
@@ -590,42 +678,76 @@ def main():
             rel_out = _norm(os.path.join(ns, rel_dir, base)) if rel_dir else \
                 _norm(os.path.join(ns, base))
             out_file = _norm(os.path.join(out_root, rel_out))
-            plan.append({
-                "project": pname, "ns": ns, "source": _norm(full),
-                "srcroot": srcroot, "out": out_file, "edits": edits,
-                "changes": changes,
-                "declared": [o for o in file_mods if o in rm],
-            })
+            module_info = {o: dict(decl_by_name[o]) for o in file_mods}
+            plan.append(make_item(pname, ns, full, srcroot, edits, changes,
+                                  module_info, out_file))
             nchanges += len(changes)
 
-    # unresolved-reference warnings: module-type names used as instantiation
-    # but declared only in another project (cross-project) or nowhere.
-    all_names = {o for d in module_decls.values() for o in d}
+    # common files: emit once, as-is (no rename edits at all)
+    for full in common_files:
+        srcroot = file_srcroot[full]
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        rel_dir = _norm(os.path.relpath(os.path.dirname(full), srcroot))
+        if rel_dir == ".":
+            rel_dir = ""
+        base = os.path.basename(full)
+        rel_out = _norm(os.path.join("common", rel_dir, base)) if rel_dir else \
+            _norm(os.path.join("common", base))
+        out_file = _norm(os.path.join(out_root, rel_out))
+        module_info = {o: dict(decl_by_name[o])
+                       for o in sorted(file_declared[full] & common_set)}
+        common_plan.append(make_item("COMMON", "common", full, srcroot,
+                                     {}, [], module_info, out_file))
+
+    # ---- warning pass
+    # (a) per-project: instantiated module-type names not managed by this
+    #     project's rename map and not common (real cross-project refs).
+    other_declared = all_orig - common_set
     for item in plan:
-        if item["project"] not in module_decls:
-            continue
         known_this = set(rename_maps[item["project"]].keys())
-        other_names = all_names - known_this
-        with open(item["source"], "r", encoding="utf-8", errors="replace") as f:
+        foreign = other_declared - known_this
+        if not foreign:
+            continue
+        with open(item["source"], "r", encoding="utf-8",
+                  errors="replace") as f:
             text = f.read()
         toks = tokenize(text)
         stream = _sig_stream(toks)
         for p, ti in enumerate(stream):
             t = toks[ti]
-            if t.kind != "id" or t.text not in other_names:
+            if t.kind != "id" or t.text not in foreign:
                 continue
             if p > 0 and toks[stream[p - 1]].kind == "punct" and \
                     toks[stream[p - 1]].text in (".", ":"):
                 continue
-            if _is_instance_candidate(stream, p, toks, other_names):
-                unresolved.append((item["source"], t.line, t.text,
-                                   "declared only in project(s): %s"
-                                   % ", ".join(sorted(
-                                       pn for pn, d in module_decls.items()
-                                       if t.text in d)) or "unknown"))
-    for src, ln, name, where in unresolved:
-        print("[WARN] %s:%d: module '%s' instantiated but %s -> left as-is "
-              "(cross-project dependency is P2)" % (src, ln, name, where))
+            if _is_instance_candidate(stream, p, toks, foreign):
+                where = "declared only in project(s): %s" % ", ".join(sorted(
+                    pn for pn in projects if t.text in module_decls[pn]))
+                print("[WARN] %s:%d: '%s' instantiated but %s -> left as-is "
+                      "(cross-project dependency is P2)"
+                      % (item["source"], t.line, t.text, where))
+    # (b) common files must not reference namespaced (non-common) modules,
+    #     otherwise the single shared copy cannot bind to the per-project names.
+    for item in common_plan:
+        with open(item["source"], "r", encoding="utf-8",
+                  errors="replace") as f:
+            text = f.read()
+        toks = tokenize(text)
+        stream = _sig_stream(toks)
+        for p, ti in enumerate(stream):
+            t = toks[ti]
+            if t.kind != "id" or t.text not in other_declared:
+                continue
+            if p > 0 and toks[stream[p - 1]].kind == "punct" and \
+                    toks[stream[p - 1]].text in (".", ":"):
+                continue
+            if _is_instance_candidate(stream, p, toks, other_declared):
+                print("[WARN] %s:%d: common file references non-common module "
+                      "'%s' with its bare name; the shared copy can only bind "
+                      "to other common/external modules - add '%s' to "
+                      "'common_modules' if it is shared, or keep this module "
+                      "per-project" % (item["source"], t.line, t.text, t.text))
 
     # ---- reporting per requested mode
     if args.dry_run:
@@ -634,8 +756,11 @@ def main():
             for ln, col, old, new, kind in item["changes"]:
                 print("    %s:%d:%d  [%s] %s -> %s"
                       % (item["source"], ln, col, kind, old, new))
-        print("\n[DRY-RUN] Would generate %d file(s) under %s/"
-              % (len(plan), out_root))
+        for item in common_plan:
+            print("    (common, copied as-is) %s -> %s"
+                  % (item["source"], item["out"]))
+        print("\n[DRY-RUN] Would generate %d namespaced + %d common file(s) "
+              "under %s/" % (len(plan), len(common_plan), out_root))
         print("[DRY-RUN] OK - nothing was written.")
         sys.exit(0)
 
@@ -645,30 +770,40 @@ def main():
 
     # ---- generate
     print("\n[INFO] Generating RTL under %s/ ..." % out_root)
+    # the out dir is fully derived output: wipe it so modules that became
+    # common / renamed / removed never leave stale copies behind
+    if os.path.exists(out_root):
+        shutil.rmtree(out_root)
+    os.makedirs(out_root, exist_ok=True)
     module_map = {}
     generated = []
-    for item in plan:
-        with open(item["source"], "r", encoding="utf-8", errors="replace") as f:
+    all_items = plan + common_plan
+    for item in all_items:
+        with open(item["source"], "r", encoding="utf-8",
+                  errors="replace") as f:
             text = f.read()
         rewritten = apply_edits(text, item["edits"])
-        header = GENERATED_HEADER.format(v=TOOL_VERSION,
-                                         src=item["source"],
-                                         project=item["project"],
-                                         ns=item["ns"])
+        if args.header:
+            header = GENERATED_HEADER.format(v=TOOL_VERSION,
+                                             src=item["source"],
+                                             project=item["project"],
+                                             ns=item["ns"])
+            rewritten = header + rewritten
         os.makedirs(os.path.dirname(item["out"]) or ".", exist_ok=True)
         with open(item["out"], "w", encoding="utf-8") as f:
-            f.write(header + rewritten)
+            f.write(rewritten)
         generated.append(item["out"])
 
         pm = module_map.setdefault(item["project"], {})
-        for o in item["declared"]:
-            d = module_decls[item["project"]][o][0]
-            pm[o] = {
-                "new_name": rename_maps[item["project"]][o],
+        for orig, d in item["module_info"].items():
+            pm[orig] = {
+                "new_name": orig if item["project"] == "COMMON"
+                else gen_name(item["ns"], orig),
                 "source": d["source"],
                 "line": d["line"],
                 "generated": _norm(os.path.relpath(item["out"])),
                 "namespace": item["ns"],
+                "common": item["project"] == "COMMON",
             }
 
     # module_map.json
@@ -684,13 +819,14 @@ def main():
         for g in sorted(generated):
             f.write(_norm(os.path.relpath(g)) + "\n")
 
-    print("[INFO] Generated %d file(s)." % len(generated))
+    print("[INFO] Generated %d namespaced + %d common file(s) (total %d)."
+          % (len(plan), len(common_plan), len(generated)))
     print("[INFO] module_map.json -> %s" % mm_path)
     print("[INFO] filelist.f      -> %s" % fl_path)
     print("[INFO] Done.")
 
 
-def validate(module_decls, rename_maps, cfg):
+def validate(module_decls, rename_maps, common_set):
     """Return list of error strings (empty == clean)."""
     errors = []
 
@@ -698,17 +834,25 @@ def validate(module_decls, rename_maps, cfg):
     for pname, decls in module_decls.items():
         for orig, dlist in decls.items():
             if len(dlist) > 1:
-                files = ", ".join("%s:%d" % (d["source"], d["line"]) for d in dlist)
-                errors.append("Duplicate module '%s' in project %s "
-                              "(would both map to '%s'): %s"
-                              % (orig, pname, rename_maps[pname][orig], files))
+                files = ", ".join("%s:%d" % (d["source"], d["line"])
+                                  for d in dlist)
+                if orig in common_set:
+                    errors.append("Duplicate common module '%s' declared in "
+                                  "multiple files: %s" % (orig, files))
+                else:
+                    errors.append("Duplicate module '%s' in project %s "
+                                  "(would both map to '%s'): %s"
+                                  % (orig, pname, rename_maps[pname][orig],
+                                     files))
 
-    # generated-name collision across everything
+    # generated-name collision across everything (common names are bare and
+    # unique by the earlier checks, so only namespaced names are compared)
     seen = {}
     for pname, decls in module_decls.items():
-        for orig, dlist in decls.items():
+        for orig in decls:
+            if orig in common_set:
+                continue
             new = rename_maps[pname][orig]
-            first_src = dlist[0]["source"]
             if new in seen and seen[new] != (pname, orig):
                 errors.append("Namespace collision: '%s' produced by both "
                               "%s:%s and %s:%s"
