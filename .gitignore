@@ -1,0 +1,29 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- generated build output (rtl_namespace.py) ----
+build/
+
+# ---- simulator / lint artifacts ----
+*.vvp
+*.vcd
+*.lxt
+*.fst
+*.log
+*.dump
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---- scratch ----
+tmp/
+scratch/

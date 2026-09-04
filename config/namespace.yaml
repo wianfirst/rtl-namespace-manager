@@ -1,0 +1,21 @@
+# RTL Namespace Manager - P1 configuration
+# See RTL_Namespace_Manager_方案设计计划.md (sec 5) and P1执行文档.md (sec 5)
+projects:
+
+  PROJA:
+    source:
+      - src/PROJA
+    namespace: PROJA
+    rename:
+      module: true
+      interface: false
+      package: false
+
+  PROJB:
+    source:
+      - src/PROJB
+    namespace: PROJB
+    rename:
+      module: true
+      interface: false
+      package: false
