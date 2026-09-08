@@ -44,7 +44,7 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 GENERATED_HEADER = (  # only used with --header (off by default)
     "// ------------------------------------------------------------------\n"
     "// GENERATED FILE - DO NOT EDIT / DO NOT COMMIT TO PERFORCE\n"
@@ -466,6 +466,67 @@ def collect_project_files(proj, cfg):
     return files
 
 
+def collect_project_inputs(proj, cfg, all_namespaces):
+    """Split a project's recursive source tree into generated and passthrough
+    inputs.
+
+    A file named ``<PROJECT>_<module>.v`` or
+    ``<PROJECT>__<module>.sv`` is an already namespaced project override.  It
+    is copied unchanged for that project only.  A generic sibling with the
+    same module stem is suppressed for that project, while every other project
+    still consumes and namespaces the generic RTL normally.
+
+    The override key includes its source root and relative directory.  This
+    keeps unrelated modules with the same basename in separate nested source
+    trees from silently shadowing one another.
+    """
+    normal = []
+    overrides = {}
+
+    def existing_namespace(stem):
+        # Check the double-underscore spelling first: it must not be consumed
+        # by the single-underscore fallback.
+        for ns in sorted(all_namespaces, key=len, reverse=True):
+            for prefix in (ns + "__", ns + "_"):
+                if stem.startswith(prefix) and len(stem) > len(prefix):
+                    return ns, stem[len(prefix):]
+        return None, None
+
+    for full, srcroot in collect_project_files(proj, cfg):
+        stem = os.path.splitext(os.path.basename(full))[0]
+        owner, orig = existing_namespace(stem)
+        rel_dir = _norm(os.path.relpath(os.path.dirname(full), srcroot))
+        if rel_dir == ".":
+            rel_dir = ""
+        key = (_norm(srcroot), rel_dir, orig)
+        if owner is None:
+            normal.append((full, srcroot))
+            continue
+        if owner != proj["namespace"]:
+            # A pre-namespaced file is private to its owning project.  Do not
+            # copy it into the other projects' generated trees.
+            continue
+        if key in overrides:
+            die("project '%s': multiple existing namespace overrides for '%s' "
+                "under %s" % (cfg, orig, os.path.join(srcroot, rel_dir)))
+        overrides[key] = {"source": full, "srcroot": srcroot,
+                          "orig": orig, "actual": stem, "rel_dir": rel_dir}
+
+    selected = []
+    for full, srcroot in normal:
+        stem = os.path.splitext(os.path.basename(full))[0]
+        rel_dir = _norm(os.path.relpath(os.path.dirname(full), srcroot))
+        if rel_dir == ".":
+            rel_dir = ""
+        if (_norm(srcroot), rel_dir, stem) in overrides:
+            # The existing project-specific module is authoritative for this
+            # project.  Other projects have independent input selections.
+            continue
+        selected.append((full, srcroot))
+
+    return selected, [overrides[k] for k in sorted(overrides)]
+
+
 def _excluded(full, patterns, srcroot):
     rel = _norm(os.path.relpath(full, srcroot))
     for pat in patterns:
@@ -558,13 +619,26 @@ def main():
         for s in pr["sources"]:
             print("    %s: %s  (namespace=%s)" % (pname, s, pr["namespace"]))
 
+    # Select inputs before scanning.  This prevents an existing
+    # PROJA_fifo.v from being treated as a generic module and renamed again.
+    all_namespaces = {pr["namespace"] for pr in projects.values()}
+    project_files = {}
+    project_overrides = {}
+    for pname, pr in projects.items():
+        files, overrides = collect_project_inputs(pr, pname, all_namespaces)
+        project_files[pname] = files
+        project_overrides[pname] = overrides
+        for ov in overrides:
+            print("[INFO] %s: existing namespace override %s -> %s "
+                  "(copied unchanged)" % (pname, ov["orig"], ov["actual"]))
+
     print("\n[INFO] Scanning RTL...")
     module_decls = {}      # project -> orig -> [decl dicts]
     decl_by_name = {}      # orig -> first {source, line} (across all projects)
     file_declared = {}     # source -> set(orig names declared in that file)
     file_srcroot = {}      # source -> source root used to reach it
     for pname, pr in projects.items():
-        files = collect_project_files(pr, pname)
+        files = project_files[pname]
         decls, per_file = scan_modules(files)
         module_decls[pname] = decls
         for orig, dlist in decls.items():
@@ -572,9 +646,10 @@ def main():
                 decl_by_name[orig] = dict(dlist[0])
         for src, names in per_file.items():
             file_declared.setdefault(src, set()).update(names)
-    # remember which source root reaches each file (used to mirror subdirs)
-    for pname, pr in projects.items():
-        for full, srcroot in collect_project_files(pr, pname):
+    # remember which source root reaches each generated file (used to mirror
+    # nested source directories in the output tree)
+    for pname in projects:
+        for full, srcroot in project_files[pname]:
             file_srcroot.setdefault(full, srcroot)
 
     all_orig = set(decl_by_name)
@@ -619,6 +694,19 @@ def main():
         ns = projects[pname]["namespace"]
         rename_maps[pname] = {o: gen_name(ns, o) for o in decls
                               if o not in common_set}
+        for ov in project_overrides[pname]:
+            if ov["orig"] in common_set:
+                die("project '%s': existing namespace override '%s' conflicts "
+                    "with common_modules; common modules cannot be project "
+                    "specific" % (pname, ov["orig"]))
+            if ov["orig"] in rename_maps[pname]:
+                die("project '%s': existing namespace override '%s' conflicts "
+                    "with a generic module declared in another directory; "
+                    "keep the override beside the generic RTL or make the "
+                    "source modules unique" % (pname, ov["orig"]))
+            # Other RTL in this project still refers to the generic name.
+            # Point those instantiations at the pre-namespaced implementation.
+            rename_maps[pname][ov["orig"]] = ov["actual"]
 
     print("\n[INFO] Module namespace (renamed per project):")
     for pname, decls in sorted(module_decls.items()):
@@ -660,7 +748,7 @@ def main():
     for pname, pr in projects.items():
         ns = projects[pname]["namespace"]
         rm = rename_maps[pname]
-        for full, srcroot in collect_project_files(pr, pname):
+        for full, srcroot in project_files[pname]:
             if full in common_files:
                 continue  # handled once, below
             with open(full, "r", encoding="utf-8", errors="replace") as f:
@@ -682,6 +770,23 @@ def main():
             plan.append(make_item(pname, ns, full, srcroot, edits, changes,
                                   module_info, out_file))
             nchanges += len(changes)
+
+        # Existing <PROJECT>_<module> / <PROJECT>__<module> RTL already owns
+        # its namespace.  Preserve it byte-for-byte and keep both its filename
+        # and relative nested directory in the generated project tree.
+        for ov in project_overrides[pname]:
+            out_file = _norm(os.path.join(
+                out_root, ns, ov["rel_dir"], os.path.basename(ov["source"])))
+            override_decls, _ = scan_modules([(ov["source"], ov["srcroot"])])
+            dlist = override_decls.get(ov["actual"], [])
+            if not dlist:
+                die("project '%s': existing namespace override %s must declare "
+                    "module %s" % (pname, ov["source"], ov["actual"]))
+            module_info = {ov["orig"]: dict(dlist[0])}
+            item = make_item(pname, ns, ov["source"], ov["srcroot"], {}, [],
+                             module_info, out_file)
+            item["passthrough"] = True
+            plan.append(item)
 
     # common files: emit once, as-is (no rename edits at all)
     for full in common_files:
@@ -782,8 +887,8 @@ def main():
         with open(item["source"], "r", encoding="utf-8",
                   errors="replace") as f:
             text = f.read()
-        rewritten = apply_edits(text, item["edits"])
-        if args.header:
+        rewritten = text if item.get("passthrough") else apply_edits(text, item["edits"])
+        if args.header and not item.get("passthrough"):
             header = GENERATED_HEADER.format(v=TOOL_VERSION,
                                              src=item["source"],
                                              project=item["project"],
@@ -798,7 +903,8 @@ def main():
         for orig, d in item["module_info"].items():
             pm[orig] = {
                 "new_name": orig if item["project"] == "COMMON"
-                else gen_name(item["ns"], orig),
+                else rename_maps[item["project"]].get(
+                    orig, gen_name(item["ns"], orig)),
                 "source": d["source"],
                 "line": d["line"],
                 "generated": _norm(os.path.relpath(item["out"])),

@@ -58,6 +58,7 @@ make namespace
 
 # 5. acceptance + compile smoke test (uses iverilog on the demo subset)
 make verify
+make verify_overrides  # recursive directories + existing project RTL
 bash scripts/run_p1.sh
 ```
 
@@ -81,6 +82,24 @@ The common list applies to every project. A file that declares a common module
 must not also declare non-common modules (validation rejects mixed files);
 a common file that instantiates a non-common module produces a `[WARN]`.
 
+### Existing project-specific RTL
+
+Sources are scanned recursively. When a nested source directory contains an
+already namespaced file named `<PROJECT>_<module>.v` (or the existing
+`<PROJECT>__<module>.sv` spelling), it is treated as that project's override:
+
+- it is copied unchanged only into that project's output tree;
+- a same-directory generic `<module>.v` is not generated for that project;
+- references to `<module>` from that project's other RTL are rewritten to the
+  existing module name; and
+- other projects continue to generate their own namespaced version from the
+  generic RTL.
+
+For example, given `src/ip/fifo.v` and `src/ip/PROJA_fifo.v`, PROJA receives
+the unchanged `PROJA_fifo.v`, while PROJB still receives `PROJB__fifo.v`.
+This preserves the current double-underscore generated-name convention; both
+single- and double-underscore existing override filenames are accepted.
+
 ### Overriding the RTL source directory
 
 The `source:` dirs from the config can be overridden on the command line /
@@ -91,10 +110,18 @@ Makefile without editing the YAML:
 python3 tools/rtl_namespace.py --config config/namespace.yaml --out build/all \
     --src src,src/extra
 
-# via Makefile (omit RTL_SRC to use the config's source dirs)
-make namespace RTL_SRC=src,src/extra
+# via Makefile. RTL_SRC is the recursively scanned root (or comma-separated
+# roots), and NAMESPACE_OUT is the generated-output root.
+make namespace RTL_SRC=src,src/extra NAMESPACE_OUT=out/rtl_namespace
 make namespace_dryrun RTL_SRC=/path/to/other/rtl
+# use a project-specific namespace configuration when needed
+make namespace NAMESPACE_CONFIG=config/my_namespace.yaml
 ```
+
+The Makefile defaults are `RTL_SRC=src` and `NAMESPACE_OUT=build/all`. All
+three Makefile paths (`RTL_SRC`, `NAMESPACE_OUT`, `NAMESPACE_CONFIG`) are
+overrideable on the command line, so the tool can be used from an existing
+project without editing the copied Makefile.
 
 ### Output
 

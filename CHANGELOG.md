@@ -4,6 +4,23 @@ All notable changes to **rtl-namespace-manager** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning: [SemVer](https://semver.org/). Tags: `v<version>`.
 
+## [1.2.0] - 2026-09-08
+
+### Added
+- Recursive source-tree support is now covered by a regression fixture.
+- Existing project-specific RTL overrides: a nested
+  `<PROJECT>_<module>.<ext>` or `<PROJECT>__<module>.<ext>` is copied
+  unchanged for its own project, shadows a same-directory generic source for
+  that project, and remains private to that project. Other projects still
+  generate their namespace from the generic module.
+- `make verify_overrides` validates both recursive discovery and override
+  reference rewriting.
+
+### Changed
+- Makefile paths are now configurable: `RTL_SRC` controls the recursively
+  scanned RTL root(s), while `NAMESPACE_OUT` controls generated output. They
+  default to `src` and `build/all`, respectively.
+
 ## [1.1.0] - 2026-09-04
 
 ### Added

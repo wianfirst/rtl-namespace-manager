@@ -1,0 +1,7 @@
+projects:
+  PROJA:
+    source: [tests/override_fixture/src]
+    namespace: PROJA
+  PROJB:
+    source: [tests/override_fixture/src]
+    namespace: PROJB
