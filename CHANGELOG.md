@@ -4,6 +4,16 @@ All notable changes to **rtl-namespace-manager** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning: [SemVer](https://semver.org/). Tags: `v<version>`.
 
+## [1.2.1] - 2026-09-09
+
+### Fixed
+- RTL files with a `.v` extension that contain only `` `define `` text and no
+  `module` declaration (header-like content, e.g. a `.vh`-style file) no
+  longer crash the generator: they are copied byte-for-byte into each
+  project tree and reported as header/no-module passthrough files.
+  Regression fixture: `tests/nomodule_fixture`; verifier:
+  `scripts/verify_nomodule.py`.
+
 ## [1.2.0] - 2026-09-08
 
 ### Added

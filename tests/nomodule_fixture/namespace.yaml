@@ -1,0 +1,9 @@
+projects:
+  PROJA:
+    source:
+      - src
+    namespace: PROJA
+  PROJB:
+    source:
+      - src
+    namespace: PROJB

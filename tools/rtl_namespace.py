@@ -44,7 +44,7 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.2.1"
 GENERATED_HEADER = (  # only used with --header (off by default)
     "// ------------------------------------------------------------------\n"
     "// GENERATED FILE - DO NOT EDIT / DO NOT COMMIT TO PERFORCE\n"
@@ -754,7 +754,11 @@ def main():
             with open(full, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
             _toks, edits, changes = plan_renames(text, rm)
-            file_mods = sorted(file_declared[full] & set(rm))
+            # files may contain NO module declarations at all (e.g. `define-only
+            # header files with a .v extension): treat them as passthrough
+            # copies - never an error, nothing to rename inside them.
+            declared_here = file_declared.get(full, set())
+            file_mods = sorted(declared_here & set(rm))
             renamed_in_file = [o for o in file_mods if o in rm]
             if len(renamed_in_file) == 1:
                 base = rm[renamed_in_file[0]] + os.path.splitext(full)[1]
@@ -804,6 +808,17 @@ def main():
                        for o in sorted(file_declared[full] & common_set)}
         common_plan.append(make_item("COMMON", "common", full, srcroot,
                                      {}, [], module_info, out_file))
+
+    # per-project files that declare no module (header-like / `define-only)
+    # are copied byte-for-byte into each project tree
+    no_module_files = [i for i in plan
+                       if i["project"] != "COMMON" and not i["module_info"]]
+    if no_module_files:
+        print("[INFO] %d file(s) with no module declarations (e.g. `define-only "
+              "header .v files) will be copied as-is into each project tree:"
+              % len(no_module_files))
+        for i in no_module_files:
+            print("    %s -> %s" % (i["source"], i["out"]))
 
     # ---- warning pass
     # (a) per-project: instantiated module-type names not managed by this
@@ -864,8 +879,13 @@ def main():
         for item in common_plan:
             print("    (common, copied as-is) %s -> %s"
                   % (item["source"], item["out"]))
+        for item in plan:
+            if item["project"] != "COMMON" and not item["module_info"]:
+                print("    (header/no module, copied as-is) %s -> %s"
+                      % (item["source"], item["out"]))
         print("\n[DRY-RUN] Would generate %d namespaced + %d common file(s) "
-              "under %s/" % (len(plan), len(common_plan), out_root))
+              "(incl. %d header/no-module copy) under %s/"
+              % (len(plan), len(common_plan), len(no_module_files), out_root))
         print("[DRY-RUN] OK - nothing was written.")
         sys.exit(0)
 
@@ -925,8 +945,9 @@ def main():
         for g in sorted(generated):
             f.write(_norm(os.path.relpath(g)) + "\n")
 
-    print("[INFO] Generated %d namespaced + %d common file(s) (total %d)."
-          % (len(plan), len(common_plan), len(generated)))
+    print("[INFO] Generated %d namespaced + %d common file(s) (total %d, incl. "
+          "%d header/no-module copy)."
+          % (len(plan), len(common_plan), len(generated), len(no_module_files)))
     print("[INFO] module_map.json -> %s" % mm_path)
     print("[INFO] filelist.f      -> %s" % fl_path)
     print("[INFO] Done.")
