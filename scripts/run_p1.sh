@@ -31,10 +31,10 @@ find build/all -type f | sort
 
 echo
 echo "########## STEP 4: spot-check generated RTL ##########"
-echo "--- build/all/PROJA/rtl/PROJA__ctrl.sv ---"
-cat build/all/PROJA/rtl/PROJA__ctrl.sv
-echo "--- build/all/PROJB/rtl/PROJB__fifo.sv (head) ---"
-head -n 8 build/all/PROJB/rtl/PROJB__fifo.sv
+echo "--- build/all/PROJA/PROJA__ctrl.sv ---"
+cat build/all/PROJA/PROJA__ctrl.sv
+echo "--- build/all/PROJB/PROJB__fifo.sv (head) ---"
+head -n 8 build/all/PROJB/PROJB__fifo.sv
 
 echo
 echo "########## STEP 5: CHECK MODE ##########"
@@ -60,15 +60,15 @@ head -n 2 "$COMMON_OUT" > /dev/null
 grep -q "^module $COMMON_NAME" "$COMMON_OUT" \
     && echo "[OK] common module declaration NOT renamed" \
     || { echo "[FAIL] common module declaration was renamed"; exit 1; }
-if ls build/all/PROJA/rtl/PROJA__AOU_RX_CORE.sv build/all/PROJB/rtl/PROJB__AOU_RX_CORE.sv \
-       build/all/PROJA/rtl/AOU_RX_CORE.sv build/all/PROJB/rtl/AOU_RX_CORE.sv 2>/dev/null; then
+if ls build/all/PROJA/PROJA__AOU_RX_CORE.sv build/all/PROJB/PROJB__AOU_RX_CORE.sv \
+       build/all/PROJA/AOU_RX_CORE.sv build/all/PROJB/AOU_RX_CORE.sv 2>/dev/null; then
     echo "[FAIL] stale/duplicate AOU_RX_CORE copy present in project trees"
     exit 1
 else
     echo "[OK] no AOU_RX_CORE copy inside PROJA/PROJB trees (single shared copy)"
 fi
 if grep -rEq "PROJA__AOU_RX_CORE([^A-Za-z0-9_]|$)|PROJB__AOU_RX_CORE([^A-Za-z0-9_]|$)" \
-       build/all/PROJA/rtl build/all/PROJB/rtl; then
+       build/all/PROJA build/all/PROJB; then
     echo "[FAIL] common module instantiation was namespaced somewhere"
     exit 1
 else
@@ -98,10 +98,10 @@ echo "  ... (total $(wc -l < build/all/filelist.f) files)"
 # not depend on the real PROJA design's external packages (e.g. packet_def_pkg).
 DEMO_FL=/tmp/p1_demo.fl
 printf '%s\n' \
-    build/all/PROJA/rtl/PROJA__ctrl.sv \
-    build/all/PROJA/rtl/PROJA__fifo.sv \
-    build/all/PROJB/rtl/PROJB__ctrl.sv \
-    build/all/PROJB/rtl/PROJB__fifo.sv > "$DEMO_FL"
+    build/all/PROJA/PROJA__ctrl.sv \
+    build/all/PROJA/PROJA__fifo.sv \
+    build/all/PROJB/PROJB__ctrl.sv \
+    build/all/PROJB/PROJB__fifo.sv > "$DEMO_FL"
 echo "--- elaborate PROJA__ctrl (needs PROJA__fifo) ---"
 iverilog -g2012 -Wall -s PROJA__ctrl -o /tmp/p1_proja.vvp -f "$DEMO_FL" \
     && echo "[OK]   iverilog elaborated PROJA__ctrl -> PROJA__fifo" \

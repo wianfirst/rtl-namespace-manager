@@ -4,6 +4,20 @@ All notable changes to **rtl-namespace-manager** are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning: [SemVer](https://semver.org/). Tags: `v<version>`.
 
+## [Unreleased]
+
+### Changed
+- Project output is flat: nested source RTL, existing project overrides and
+  no-module headers are emitted directly under `<out>/<PROJECT>/`.
+  Common output retains its existing layout.
+
+### Fixed
+- Files declaring multiple modules now use `<PROJECT>__<source filename>`;
+  all module declarations and instantiations continue to be namespaced.
+- Output filename collisions fail before writing or clearing output, including
+  in `--check` and `--dry-run` modes.
+- Updated acceptance paths and added `make verify_flat` regression coverage.
+
 ## [1.2.1] - 2026-09-09
 
 ### Fixed

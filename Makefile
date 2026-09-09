@@ -10,7 +10,7 @@ NAMESPACE_TOOL   ?= tools/rtl_namespace.py
 RTL_SRC ?= src
 SRC_ARG = $(if $(strip $(RTL_SRC)),--src $(RTL_SRC))
 
-.PHONY: namespace namespace_check namespace_dryrun namespace_diff verify verify_overrides sim clean
+.PHONY: namespace namespace_check namespace_dryrun namespace_diff verify verify_overrides verify_flat sim clean
 
 namespace:
 	python3 $(NAMESPACE_TOOL) --config $(NAMESPACE_CONFIG) --out $(NAMESPACE_OUT) $(SRC_ARG)
@@ -29,6 +29,9 @@ verify:
 
 verify_overrides:
 	python3 scripts/verify_overrides.py
+
+verify_flat:
+	python3 scripts/verify_flat.py
 
 sim: namespace
 	vcs -f $(NAMESPACE_OUT)/filelist.f

@@ -29,8 +29,8 @@ with tempfile.TemporaryDirectory(prefix="rtl-ns-override-") as temp:
     subprocess.run([sys.executable, TOOL, "--config", CONFIG, "--out", out],
                    cwd=ROOT, check=True)
 
-    pa_dir = os.path.join(out, "PROJA", "ip", "nested")
-    pb_dir = os.path.join(out, "PROJB", "ip", "nested")
+    pa_dir = os.path.join(out, "PROJA")
+    pb_dir = os.path.join(out, "PROJB")
     pa_existing = os.path.join(pa_dir, "PROJA_fifo.v")
     pa_ctrl = os.path.join(pa_dir, "PROJA__ctrl.v")
     pb_fifo = os.path.join(pb_dir, "PROJB__fifo.v")

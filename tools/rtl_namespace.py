@@ -10,7 +10,7 @@ and RTL_Namespace_Manager_P1执行文档.md).
 Original Perforce RTL is NEVER modified. Generated, namespaced copies are
 written under the --out directory, e.g.
 
-    src/PROJA/rtl/fifo.sv   --module fifo-->   build/all/PROJA/rtl/PROJA__fifo.sv
+    src/PROJA/rtl/fifo.sv   --module fifo-->   build/all/PROJA/PROJA__fifo.sv
 
 Rewriting is token/syntax based (NOT naive text.replace): module declarations
 and module instantiation statements are identified from the token stream, so
@@ -762,25 +762,23 @@ def main():
             renamed_in_file = [o for o in file_mods if o in rm]
             if len(renamed_in_file) == 1:
                 base = rm[renamed_in_file[0]] + os.path.splitext(full)[1]
+            elif renamed_in_file:
+                # A file containing several modules has no single module
+                # name to use as its filename. Namespace the source filename.
+                base = gen_name(ns, os.path.basename(full))
             else:
                 base = os.path.basename(full)
-            rel_dir = _norm(os.path.relpath(os.path.dirname(full), srcroot))
-            if rel_dir == ".":
-                rel_dir = ""
-            rel_out = _norm(os.path.join(ns, rel_dir, base)) if rel_dir else \
-                _norm(os.path.join(ns, base))
-            out_file = _norm(os.path.join(out_root, rel_out))
+            out_file = _norm(os.path.join(out_root, ns, base))
             module_info = {o: dict(decl_by_name[o]) for o in file_mods}
             plan.append(make_item(pname, ns, full, srcroot, edits, changes,
                                   module_info, out_file))
             nchanges += len(changes)
 
         # Existing <PROJECT>_<module> / <PROJECT>__<module> RTL already owns
-        # its namespace.  Preserve it byte-for-byte and keep both its filename
-        # and relative nested directory in the generated project tree.
+        # its namespace. Keep its filename in the flat project directory.
         for ov in project_overrides[pname]:
             out_file = _norm(os.path.join(
-                out_root, ns, ov["rel_dir"], os.path.basename(ov["source"])))
+                out_root, ns, os.path.basename(ov["source"])))
             override_decls, _ = scan_modules([(ov["source"], ov["srcroot"])])
             dlist = override_decls.get(ov["actual"], [])
             if not dlist:
@@ -808,6 +806,17 @@ def main():
                        for o in sorted(file_declared[full] & common_set)}
         common_plan.append(make_item("COMMON", "common", full, srcroot,
                                      {}, [], module_info, out_file))
+
+    # Flattening can make distinct source files target the same output path.
+    # Reject that plan in all modes, before removing any previous output.
+    output_sources = {}
+    for item in plan + common_plan:
+        target = os.path.normcase(os.path.abspath(item["out"]))
+        if target in output_sources:
+            die("Output path collision: %s is produced by both %s and %s; "
+                "use unique output filenames for a flat project directory"
+                % (item["out"], output_sources[target], item["source"]))
+        output_sources[target] = item["source"]
 
     # per-project files that declare no module (header-like / `define-only)
     # are copied byte-for-byte into each project tree

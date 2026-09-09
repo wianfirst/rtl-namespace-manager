@@ -50,8 +50,8 @@ try:
 
     print("== namespaced modules still generated ==")
     for proj in ("PROJA", "PROJB"):
-        ff = os.path.join(out, proj, "rtl", "%s__fifo.v" % proj)
-        tt = os.path.join(out, proj, "rtl", "%s__top.v" % proj)
+        ff = os.path.join(out, proj, "%s__fifo.v" % proj)
+        tt = os.path.join(out, proj, "%s__top.v" % proj)
         check(os.path.isfile(ff) and "module %s__fifo" % proj in rd(ff),
               "%s fifo namespaced" % proj)
         check(os.path.isfile(tt) and "%s__fifo #(" % proj in rd(tt),
@@ -60,7 +60,7 @@ try:
     print("== header .v (define-only) handled ==")
     orig = rd(os.path.join(SRC, "rtl_defs.v"))
     for proj in ("PROJA", "PROJB"):
-        p = os.path.join(out, proj, "rtl", "rtl_defs.v")
+        p = os.path.join(out, proj, "rtl_defs.v")
         check(os.path.isfile(p), "%s keeps rtl_defs.v passthrough copy" % proj)
         check(os.path.isfile(p) and rd(p) == orig,
               "%s rtl_defs.v byte-identical (defines intact)" % proj)
@@ -76,8 +76,8 @@ try:
     print("== filelist.f includes header copies once per project ==")
     fl = rd(os.path.join(out, "filelist.f"))
     for proj in ("PROJA", "PROJB"):
-        check(fl.count("%s/rtl/rtl_defs.v" % proj) == 1,
-              "filelist lists %s/rtl/rtl_defs.v exactly once" % proj)
+        check(fl.count("%s/rtl_defs.v" % proj) == 1,
+              "filelist lists %s/rtl_defs.v exactly once" % proj)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

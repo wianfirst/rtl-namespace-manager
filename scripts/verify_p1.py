@@ -41,7 +41,7 @@ def read(p):
 
 
 def proj_file(proj, name):
-    return os.path.join(OUT, proj, "rtl", name)
+    return os.path.join(OUT, proj, name)
 
 
 print("== Test 1: namespaced twins coexist ==")
@@ -122,10 +122,10 @@ if os.path.isfile(fl):
     missing = [l for l in lines if not os.path.exists(os.path.join(ROOT, l))]
     check(not missing, "every filelist entry exists (missing: %s)" % missing)
     demo_entries = [
-        "build/all/PROJA/rtl/PROJA__fifo.sv",
-        "build/all/PROJA/rtl/PROJA__ctrl.sv",
-        "build/all/PROJB/rtl/PROJB__fifo.sv",
-        "build/all/PROJB/rtl/PROJB__ctrl.sv",
+        "build/all/PROJA/PROJA__fifo.sv",
+        "build/all/PROJA/PROJA__ctrl.sv",
+        "build/all/PROJB/PROJB__fifo.sv",
+        "build/all/PROJB/PROJB__ctrl.sv",
     ]
     check(all(d in lines for d in demo_entries),
           "filelist.f contains the demo fifo/ctrl entries (total %d files)" % len(lines))
